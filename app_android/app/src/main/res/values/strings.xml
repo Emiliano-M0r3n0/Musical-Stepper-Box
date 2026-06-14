@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Caja Musical IoT</string>
+    <string name="titulo_pantalla">Control Mecatrónico 🎼</string>
+    <string name="txt_btn_conectar">Conectar Caja Musical</string>
+    <string name="txt_btn_reproducir">Reproducir Melodía 🎷</string>
+
+    <string name="toast_conexion_ok">¡Caja musical conectada con éxito! 🎸</string>
+    <string name="toast_conexion_error">Error: No se pudo conectar a la caja. Revisa tu Wi-Fi.</string>
+</resources>
