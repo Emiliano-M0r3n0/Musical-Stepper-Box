@@ -1,0 +1,26 @@
+# --- PLATFORMIO / ESP32 ---
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+.vscode/
+
+# --- ANDROID STUDIO ---
+*.iml
+.gradle
+local.properties
+/.idea/caches/
+/.idea/libraries/
+/.idea/modules.xml
+/.idea/workspace.xml
+/build
+.DS_Store
+/captures
+**/*.apk
+**/*.bundle
+
+# --- ARCHIVOS DE SISTEMA O CAD ---
+*.bck
+*.kicad_prl
+*-backups/
