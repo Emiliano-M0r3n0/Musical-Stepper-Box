@@ -103,6 +103,28 @@ void reproducirDesdeCSV(const char *rutaArchivo)
 
 // --- Agrega esta variable global arriba de tu setup ---
 volatile bool arrancarMusica = false;
+String archivoSeleccionado = ""; // Aquí guardaremos la ruta de la canción elegida
+
+// --- FUNCIÓN PARA ESCANEAR LA MEMORIA Y MANDAR LA LISTA A ANDROID ---
+String obtenerListaCanciones() {
+    String lista = "";
+    File raiz = LittleFS.open("/");
+    if (!raiz) return "ERROR_AL_LEER_RAIZ";
+
+    File archivo = raiz.openNextFile();
+    while (archivo) {
+        String nombre = archivo.name();
+        // Filtramos para mandar solo los archivos que sean de música (.csv)
+        if (nombre.endsWith(".csv")) {
+            if (lista.length() > 0) {
+                lista += ","; // Separamos las canciones por comas para la App
+            }
+            lista += nombre;
+        }
+        archivo = raiz.openNextFile();
+    }
+    return lista;
+}
 
 void setup()
 {
@@ -130,12 +152,24 @@ void setup()
   server.on("/conectar", HTTP_GET, [](AsyncWebServerRequest *request)
             { request->send(200, "text/plain", "CONEXION_EXITOSA"); });
 
-  // --- Cambia el endpoint dentro de tu setup() para que quede así ---
-  server.on("/reproducir", HTTP_GET, [](AsyncWebServerRequest *request)
-            {
-              request->send(200, "text/plain", "Procesando archivo CSV de música...");
-              arrancarMusica = true; // Solo activamos la señal, no bloqueamos el servidor
-            });
+  // Nuevo Endpoint: La app de Android llamará aquí para llenar su lista/spinner
+    server.on("/lista", HTTP_GET, [](AsyncWebServerRequest *request){
+        String listaCanciones = obtenerListaCanciones();
+        request->send(200, "text/plain", listaCanciones);
+    });
+
+// Endpoint Modificado: Ahora recibe el nombre de la canción dinámicamente
+    server.on("/reproducir", HTTP_GET, [](AsyncWebServerRequest *request){
+        // Comprobamos si la App envió el parámetro de la canción (ej: ?archivo=love_grows.csv)
+        if (request->hasParam("archivo")) {
+            AsyncWebParameter* p = request->getParam("archivo");
+            archivoSeleccionado = "/" + p->value(); // Construimos la ruta (/love_grows.csv)
+            arrancarMusica = true;                  // Activamos la bandera para el loop
+            request->send(200, "text/plain", "Reproduciendo: " + p->value());
+        } else {
+            request->send(400, "text/plain", "Falta el parámetro 'archivo'");
+        }
+    });
 
   server.end(); // Asegurar reinicio limpio de rutas
   server.begin();
@@ -143,8 +177,9 @@ void setup()
 
 void loop()
 {
-  if (arrancarMusica) {
-        arrancarMusica = false; // Apagar la bandera inmediatamente
-        reproducirDesdeCSV("/cancion.csv"); 
+if (arrancarMusica) {
+        arrancarMusica = false; 
+        // Convertimos el String de C++ a una cadena clásica de C (const char*)
+        reproducirDesdeCSV(archivoSeleccionado.c_str()); 
     }
 }
