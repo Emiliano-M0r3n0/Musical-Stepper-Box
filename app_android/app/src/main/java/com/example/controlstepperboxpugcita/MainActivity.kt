@@ -3,88 +3,123 @@ package com.example.controlstepperboxpugcita
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
+import android.widget.ArrayAdapter
+import android.widget.Spinner
 import androidx.appcompat.app.AppCompatActivity
 import com.android.volley.Request
 import com.android.volley.toolbox.StringRequest
 import com.android.volley.toolbox.Volley
 import android.widget.Button
-import android.view.View
 
 class MainActivity : AppCompatActivity() {
 
-    // La IP fija que el ESP32 genera por defecto en modo Access Point
     private val IP_ESP32 = "http://192.168.4.1"
     private val TAG = "MecatronicaApp"
+
+    private lateinit var btnConectar: Button
+    private lateinit var spinnerCanciones: Spinner
+    private lateinit var btnReproducir: Button
+    private var listaDeCanciones: List<String> = ArrayList()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // 1. Encontrar los botones de la pantalla usando su ID de XML
-        val botonConectar: Button = findViewById(R.id.btnConectar)
-        val botonReproducir: Button = findViewById(R.id.btnReproducir)
+        // Inicializar TODOS los componentes de la interfaz
+        btnConectar = findViewById(R.id.btnConectar)
+        spinnerCanciones = findViewById(R.id.spinnerCanciones)
+        btnReproducir = findViewById(R.id.btnReproducir)
 
-        // 2. Configurar la acción del clic para el botón de Conectar
-        botonConectar.setOnClickListener {
-            Log.i(TAG, "Botón Conectar presionado.")
+        // Al inicio, deshabilitamos el botón de reproducir hasta que estemos conectados
+        btnReproducir.isEnabled = false
+
+        // 1. El botón Conectar valida la red y jala la lista si todo sale bien
+        btnConectar.setOnClickListener {
             enviarComandoConectar()
         }
 
-        // 3. Configurar la acción del clic para el botón de Reproducir
-        botonReproducir.setOnClickListener {
-            Log.i(TAG, "Botón Reproducir presionado.")
-            enviarComandoReproducir()
+        // 2. Configurar la acción del botón de reproducir
+        btnReproducir.setOnClickListener {
+            if (listaDeCanciones.isNotEmpty()) {
+                val cancionSeleccionada = spinnerCanciones.selectedItem.toString()
+                enviarComandoReproducir(cancionSeleccionada)
+            } else {
+                Toast.makeText(this, "La lista de canciones está vacía. Intenta conectar de nuevo.", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
     /**
-     * Envía una petición HTTP GET al ESP32 para verificar que el celular
-     * realmente tiene comunicación con la caja musical.
+     * Envía una petición HTTP GET al ESP32 para verificar la comunicación.
+     * Si tiene éxito, manda a llamar automáticamente a cargarListaDeCanciones().
      */
-    fun enviarComandoConectar() {
+    private fun enviarComandoConectar() {
         val url = "$IP_ESP32/conectar"
         val queue = Volley.newRequestQueue(this)
 
-        // Solicitamos una respuesta de texto (String) desde la URL dada
         val stringRequest = StringRequest(
             Request.Method.GET, url,
             { response ->
-                // Este bloque se ejecuta si el ESP32 responde con éxito
                 Log.d(TAG, "Respuesta del ESP32: $response")
-                if (response == "CONEXION_EXITOSA") {
-                    Toast.makeText(this, "¡Caja musical conectada con éxito! 🎸", Toast.LENGTH_SHORT).show()
+                if (response.trim() == "CONEXION_EXITOSA") {
+                    Toast.makeText(this, "¡Caja musical detectada! 🎸 Cargando canciones...", Toast.LENGTH_SHORT).show()
+
+                    // PASO CLAVE: Si la conexión es exitosa, descargamos la lista de LittleFS
+                    cargarListaDeCanciones()
                 }
             },
             { error ->
-                // Este bloque se ejecuta si la petición falla (ej: no estás en el Wi-Fi correcto)
                 Log.e(TAG, "Error de red: ${error.message}")
-                Toast.makeText(this, "Error: No se pudo conectar a la caja. Revisa tu Wi-Fi.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Error: No se pudo conectar a la caja. Revisa que estés en el Wi-Fi de la caja.", Toast.LENGTH_LONG).show()
             }
         )
-
-        // Añadimos la petición a la cola de Volley para que se envíe inmediatamente
         queue.add(stringRequest)
     }
 
-    /**
-     * Envía la orden inalámbrica al ESP32 para que comience a reproducir
-     * la melodía a través del pin STEP del motor a pasos.
-     */
-    fun enviarComandoReproducir() {
-        val url = "$IP_ESP32/reproducir"
+    // Función HTTP GET para obtener las canciones y rellenar el Spinner
+    private fun cargarListaDeCanciones() {
         val queue = Volley.newRequestQueue(this)
+        val url = "$IP_ESP32/lista"
 
-        val stringRequest = StringRequest(
-            Request.Method.GET, url,
+        val stringRequest = StringRequest(Request.Method.GET, url,
             { response ->
-                Log.d(TAG, "Respuesta del ESP32 al reproducir: $response")
-                Toast.makeText(this, "Reproduciendo melodía en el motor... 🎼", Toast.LENGTH_SHORT).show()
+                if (response.isNotEmpty() && !response.contains("ERROR")) {
+                    // Romper la cadena por comas y guardarla en la lista de Kotlin
+                    listaDeCanciones = response.split(",")
+
+                    // Llenar el adaptador visual del Spinner
+                    val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, listaDeCanciones)
+                    adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+                    spinnerCanciones.adapter = adapter
+
+                    // Habilitar el botón de reproducir ya que hay música lista
+                    btnReproducir.isEnabled = true
+                    Toast.makeText(this, "¡Lista de canciones actualizada! 🎼", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "No se encontraron archivos .csv en el ESP32", Toast.LENGTH_LONG).show()
+                }
             },
             { error ->
-                Log.e(TAG, "Error al intentar reproducir: ${error.message}")
-                Toast.makeText(this, "Error de comunicación al reproducir.", Toast.LENGTH_SHORT).show()
-            }
-        )
+                Toast.makeText(this, "Error al descargar la lista de canciones", Toast.LENGTH_SHORT).show()
+                error.printStackTrace()
+            })
+
+        queue.add(stringRequest)
+    }
+
+    // Función HTTP GET dinámica para enviar la canción elegida
+    private fun enviarComandoReproducir(archivoCsv: String) {
+        val queue = Volley.newRequestQueue(this)
+        val url = "$IP_ESP32/reproducir?archivo=$archivoCsv"
+
+        val stringRequest = StringRequest(Request.Method.GET, url,
+            { response ->
+                Toast.makeText(this, response, Toast.LENGTH_SHORT).show()
+            },
+            { error ->
+                Toast.makeText(this, "Error al enviar comando de reproducción", Toast.LENGTH_SHORT).show()
+                error.printStackTrace()
+            })
 
         queue.add(stringRequest)
     }
