@@ -3,156 +3,148 @@
 #include <ESPAsyncWebServer.h>
 #include "LittleFS.h" // Librería obligatoria para el sistema de archivos
 
-// Definimos un tipo de dato llamado 'NotaMusical' para organizar las frecuencias físicas de cada nota
-namespace Notas {
-    const uint32_t SILENCIO = 0;
-    const uint32_t DO5  = 16744; // Frecuencias ajustadas para motores configurados a 1/32 micropasos
-    const uint32_t RE5  = 18795;
-    const uint32_t MI5  = 21096;
-    const uint32_t FA5  = 22351;
-    const uint32_t SOL5 = 25091;
-    const uint32_t LA5  = 28160;
-    const uint32_t SI5  = 31609;
-    const uint32_t DO6  = 33488;
-}
-
-// Estructura para cada pulso de la canción (Dueto)
-struct PulsoMusical {
-    uint32_t frecuenciaMotor1; // Nota para el motor 1
-    uint32_t frecuenciaMotor2; // Nota para el motor 2
-    uint32_t duracionMs;       // Tiempo que durará el pulso en milisegundos
-};
-
-// Arreglo que simula lo que eventualmente leeremos desde un archivo de texto .txt
-const PulsoMusical cancionPrueba[] = {
-    // { Motor 1, Motor 2, Duración }
-    { Notas::DO5,  Notas::MI5,  400 }, // Acorde DO - MI
-    { Notas::MI5,  Notas::SOL5, 400 }, // Acorde MI - SOL
-    { Notas::SOL5, Notas::DO6,  400 }, // Acorde SOL - DO (Octava arriba)
-    { Notas::SILENCIO, Notas::SILENCIO, 100 }, // Breve silencio
-    
-    { Notas::DO6,  Notas::SOL5, 300 },
-    { Notas::FA5,  Notas::LA5,  300 },
-    { Notas::RE5,  Notas::FA5,  600 },
-    { Notas::SILENCIO, Notas::SILENCIO, 200 },
-
-    { Notas::DO5,  Notas::DO6,  800 }  // Nota sostenida final (Octavas juntas)
-};
-
-// Calculamos automáticamente cuántos pulsos tiene la canción para no hardcodear el límite
-const size_t longitudCancion = sizeof(cancionPrueba) / sizeof(cancionPrueba[0]);
-
-// --- CONFIGURACIÓN MOTOR 1 (Existente) ---
-#define PIN_DIR_1     22
-#define PIN_STEP_1    23
-#define PIN_ENABLE_1  19
+// --- CONFIGURACIÓN DE PINES ---
+#define PIN_DIR_1 22
+#define PIN_STEP_1 23
+#define PIN_ENABLE_1 19
 const uint8_t CANAL_LEDC_1 = 0;
 
-// --- CONFIGURACIÓN MOTOR 2 (Nuevo) ---
-// Nota: Asegúrate de conectar estos pines físicos de tu ESP32 a tu segundo driver
-#define PIN_DIR_2     18
-#define PIN_STEP_2    5
-#define PIN_ENABLE_2  17
-const uint8_t CANAL_LEDC_2 = 1; // Canal PWM independiente
+#define PIN_DIR_2 18
+#define PIN_STEP_2 5
+#define PIN_ENABLE_2 17
+const uint8_t CANAL_LEDC_2 = 1;
 
 const uint8_t RESOLUCION_BITS = 8;
+
 // Configuración de la red Wi-Fi del ESP32
-const char* ssid = "Musical_stepper_box";
-const char* password = "Pugcitabb"; // Mínimo 8 caracteres
+const char *ssid = "Musical_stepper_box";
+const char *password = "Pugcitabb"; // Mínimo 8 caracteres
 
 AsyncWebServer server(80);
 
-// Función modificada para controlar ambos motores simultáneamente
-void tocarDuetoPrueba(uint32_t freq1, uint32_t freq2, uint32_t duracion) {
-  // Encender ambos drivers (LOW activa el DRV8825)
-  digitalWrite(PIN_ENABLE_1, LOW);
-  digitalWrite(PIN_ENABLE_2, LOW);
-  
-  // Generar las dos frecuencias en canales separados por hardware
-  ledcWriteTone(CANAL_LEDC_1, freq1);
-  ledcWriteTone(CANAL_LEDC_2, freq2);
-  
-  delay(duracion);
-  
-  // Apagar frecuencias
-  ledcWriteTone(CANAL_LEDC_1, 0);
-  ledcWriteTone(CANAL_LEDC_2, 0);
-  
-  // Apagar drivers para que no consuman corriente en reposo
-  digitalWrite(PIN_ENABLE_1, HIGH);
-  digitalWrite(PIN_ENABLE_2, HIGH);
+// Función para inicializar LittleFS y verificar que funcione el hardware de memoria
+void iniciarLittleFS()
+{
+  if (!LittleFS.begin(true))
+  {
+    Serial.println("¡Error crítico! No se pudo montar el sistema LittleFS.");
+    return;
+  }
+  Serial.println("LittleFS montado con éxito.");
 }
 
-void setup() {
+// Función que lee el CSV línea por línea y hace sonar los motores en tiempo real
+void reproducirDesdeCSV(const char *rutaArchivo)
+{
+  // Abrir el archivo en modo lectura ("r")
+  File archivo = LittleFS.open(rutaArchivo, "r");
+  if (!archivo)
+  {
+    Serial.println("Error: No se pudo abrir el archivo de música.");
+    return;
+  }
+
+  Serial.println("Reproduciendo archivo...");
+
+  // Habilitar etapas de potencia de los drivers (LOW es activo)
+  digitalWrite(PIN_ENABLE_1, LOW);
+  digitalWrite(PIN_ENABLE_2, LOW);
+
+  // Leer el archivo línea por línea hasta el final
+  while (archivo.available())
+  {
+    String linea = archivo.readStringUntil('\n');
+    linea.trim(); // Limpiar espacios ocultos o saltos de línea de Windows (\r)
+
+    // Ignorar líneas vacías o comentarios que empiecen con '#'
+    if (linea.length() == 0 || linea.startsWith("#"))
+    {
+      continue;
+    }
+
+    // --- PROCESAR LA LÍNEA (Parsing de comas) ---
+    int primeraComa = linea.indexOf(',');
+    int segundaComa = linea.indexOf(',', primeraComa + 1);
+
+    if (primeraComa != -1 && segundaComa != -1)
+    {
+      // Recortar y convertir los fragmentos de texto a números enteros
+      uint32_t freq1 = linea.substring(0, primeraComa).toInt();
+      uint32_t freq2 = linea.substring(primeraComa + 1, segundaComa).toInt();
+      uint32_t duracion = linea.substring(segundaComa + 1).toInt();
+
+      // Ejecutar frecuencias en los motores mediante hardware LEDC
+      if (freq1 == 0)
+        ledcWriteTone(CANAL_LEDC_1, 0);
+      else
+        ledcWriteTone(CANAL_LEDC_1, freq1);
+
+      if (freq2 == 0)
+        ledcWriteTone(CANAL_LEDC_2, 0);
+      else
+        ledcWriteTone(CANAL_LEDC_2, freq2);
+
+      // Mantener la nota el tiempo indicado en el CSV
+      delay(duracion);
+
+      // Brevísimo espacio de separación de 15ms para que las notas no se empasten
+      ledcWriteTone(CANAL_LEDC_1, 0);
+      ledcWriteTone(CANAL_LEDC_2, 0);
+      delay(15);
+    }
+  }
+
+  // Cerrar el archivo y apagar motores al terminar la canción
+  archivo.close();
+  digitalWrite(PIN_ENABLE_1, HIGH);
+  digitalWrite(PIN_ENABLE_2, HIGH);
+  Serial.println("Fin de la canción.");
+}
+
+// --- Agrega esta variable global arriba de tu setup ---
+volatile bool arrancarMusica = false;
+
+void setup()
+{
   Serial.begin(115200);
-  
-  // Inicializar Pines Motor 1
+
+  // Configuración de salidas digitales
   pinMode(PIN_DIR_1, OUTPUT);
   pinMode(PIN_ENABLE_1, OUTPUT);
-  digitalWrite(PIN_DIR_1, LOW);
-  digitalWrite(PIN_ENABLE_1, HIGH);
-
-  // Inicializar Pines Motor 2
   pinMode(PIN_DIR_2, OUTPUT);
   pinMode(PIN_ENABLE_2, OUTPUT);
-  digitalWrite(PIN_DIR_2, LOW);
+  digitalWrite(PIN_ENABLE_1, HIGH);
   digitalWrite(PIN_ENABLE_2, HIGH);
 
-  // Configurar Canales PWM independientes
+  // Configuración de canales de audio por hardware
   ledcSetup(CANAL_LEDC_1, 2000, RESOLUCION_BITS);
   ledcAttachPin(PIN_STEP_1, CANAL_LEDC_1);
-
   ledcSetup(CANAL_LEDC_2, 2000, RESOLUCION_BITS);
   ledcAttachPin(PIN_STEP_2, CANAL_LEDC_2);
 
+  // Inicializar memoria Flash local
+  iniciarLittleFS();
+
   WiFi.softAP(ssid, password);
-  Serial.println(WiFi.softAPIP());
 
-  server.on("/conectar", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/plain", "CONEXION_EXITOSA");
-  });
+  server.on("/conectar", HTTP_GET, [](AsyncWebServerRequest *request)
+            { request->send(200, "text/plain", "CONEXION_EXITOSA"); });
 
-server.on("/reproducir", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("Iniciando reproducción de la melodía completa...");
-    request->send(200, "text/plain", "Reproduciendo melodía...");
-    
-    // Recorremos la partitura pulso por pulso
-    for (size_t i = 0; i < longitudCancion; i++) {
-        PulsoMusical pulsoActual = cancionPrueba[i];
-        
-        // 1. Encender los drivers de potencia
-        digitalWrite(PIN_ENABLE_1, LOW);
-        digitalWrite(PIN_ENABLE_2, LOW);
-        
-        // 2. Modular las frecuencias de hardware (Maneja silencios automáticamente)
-        if (pulsoActual.frecuenciaMotor1 == Notas::SILENCIO) {
-            ledcWriteTone(CANAL_LEDC_1, 0);
-        } else {
-            ledcWriteTone(CANAL_LEDC_1, pulsoActual.frecuenciaMotor1);
-        }
+  // --- Cambia el endpoint dentro de tu setup() para que quede así ---
+  server.on("/reproducir", HTTP_GET, [](AsyncWebServerRequest *request)
+            {
+              request->send(200, "text/plain", "Procesando archivo CSV de música...");
+              arrancarMusica = true; // Solo activamos la señal, no bloqueamos el servidor
+            });
 
-        if (pulsoActual.frecuenciaMotor2 == Notas::SILENCIO) {
-            ledcWriteTone(CANAL_LEDC_2, 0);
-        } else {
-            ledcWriteTone(CANAL_LEDC_2, pulsoActual.frecuenciaMotor2);
-        }
-        
-        // 3. Mantener la nota el tiempo que indica la partitura
-        delay(pulsoActual.duracionMs);
-        
-        // Un brevísimo espacio de 20ms entre notas para que no se escuchen "pegadas"
-        ledcWriteTone(CANAL_LEDC_1, 0);
-        ledcWriteTone(CANAL_LEDC_2, 0);
-        delay(20);
-    }
-    
-    // Apagar etapas de potencia al finalizar la canción para proteger los motores
-    digitalWrite(PIN_ENABLE_1, HIGH);
-    digitalWrite(PIN_ENABLE_2, HIGH);
-    Serial.println("Melodía finalizada.");
-  });
-
+  server.end(); // Asegurar reinicio limpio de rutas
   server.begin();
 }
 
-void loop() {}
+void loop()
+{
+  if (arrancarMusica) {
+        arrancarMusica = false; // Apagar la bandera inmediatamente
+        reproducirDesdeCSV("/cancion.csv"); 
+    }
+}
