@@ -44,7 +44,7 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:weightSum="3"
-        android:layout_marginBottom="32dp">
+        android:layout_marginBottom="24dp">
 
         <Button
             android:id="@+id/btnReproducir"
@@ -75,19 +75,62 @@
             android:backgroundTint="#F44336" />
     </LinearLayout>
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginBottom="24dp"
+        android:padding="10dp"
+        android:background="#15000000">
+
+        <TextView
+            android:id="@+id/txtProgreso"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Progreso: 0%"
+            android:textSize="14sp"
+            android:layout_gravity="center"
+            android:layout_marginBottom="6dp" />
+
+        <ProgressBar
+            android:id="@+id/progressCancion"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="0" />
+    </LinearLayout>
+
     <TextView
         android:id="@+id/txtVelocidad"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Velocidad: 1.0x (Normal)"
-        android:textSize="16sp"
-        android:textStyle="bold"
+        android:text="Velocidad: 1.0x"
+        android:textSize="14sp"
         android:layout_marginBottom="8dp"/>
 
-    <SeekBar
-        android:id="@+id/seekBarVelocidad"
-        android:layout_width="match_parent"
+    <LinearLayout
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:max="3"
-        android:progress="1" />
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnBajarVelocidad"
+            android:layout_width="60dp"
+            android:layout_height="48dp"
+            android:text="-"
+            android:textSize="18sp"
+            android:layout_marginEnd="8dp"
+            android:backgroundTint="#757575" />
+
+        <Button
+            android:id="@+id/btnSubirVelocidad"
+            android:layout_width="60dp"
+            android:layout_height="48dp"
+            android:text="+"
+            android:textSize="18sp"
+            android:layout_marginStart="8dp"
+            android:backgroundTint="#757575" />
+    </LinearLayout>
+
 </LinearLayout>

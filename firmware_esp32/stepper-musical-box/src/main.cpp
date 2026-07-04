@@ -37,6 +37,7 @@ enum EstadoMusica {
 volatile EstadoMusica estadoActual = STOPPED;
 
 String archivoParaReproducir = "";
+volatile int porcentajeProgreso = 0; // Guardará el progreso de 0 a 100%
 volatile float factorVelocidad = 1.0; // 1.0 = normal, 2.0 = doble rápido, 0.5 = mitad de velocidad
 
 // 'Handle' o identificador de la tarea de música para poder controlarla desde la red
@@ -108,9 +109,16 @@ void tareaReproductorMusica(void *pvParameters) {
                 ledcWriteTone(CANAL_LEDC_1, 0);
                 ledcWriteTone(CANAL_LEDC_2, 0);
                 vTaskDelay(pdMS_TO_TICKS(15));
+
+                // --- CÁLCULO DE PROGRESO ÓPTIMO ---
+            // Usamos las posiciones físicas del archivo en LittleFS (cero consumo de CPU)
+            size_t tamanoTotal = archivo.size();
+            if (tamanoTotal > 0) {
+                porcentajeProgreso = (archivo.position() * 100) / tamanoTotal;
+            }
             }
         }
-
+        porcentajeProgreso = 0;
         archivo.close();
         digitalWrite(PIN_ENABLE_1, HIGH);
         digitalWrite(PIN_ENABLE_2, HIGH);
@@ -197,6 +205,11 @@ void setup() {
         } else {
             request->send(400, "text/plain", "Falta factor");
         }
+    });
+
+    // Colócalo junto a tus otros métodos server.on() en el setup:
+    server.on("/progreso", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "text/plain", String(porcentajeProgreso));
     });
 
     server.begin();
