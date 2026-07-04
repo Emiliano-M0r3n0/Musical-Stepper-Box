@@ -1,124 +1,134 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
-#include "LittleFS.h" // Librería obligatoria para el sistema de archivos
+#include "LittleFS.h"
 
-// --- CONFIGURACIÓN DE PINES ---
-#define PIN_DIR_1 22
-#define PIN_STEP_1 23
-#define PIN_ENABLE_1 19
+// --- PINES DE LOS MOTORES (Se mantienen igual) ---
+#define PIN_DIR_1     22
+#define PIN_STEP_1    23
+#define PIN_ENABLE_1  19
 const uint8_t CANAL_LEDC_1 = 0;
 
-#define PIN_DIR_2 18
-#define PIN_STEP_2 5
-#define PIN_ENABLE_2 17
+#define PIN_DIR_2     18
+#define PIN_STEP_2    5
+#define PIN_ENABLE_2  17
 const uint8_t CANAL_LEDC_2 = 1;
 
 const uint8_t RESOLUCION_BITS = 8;
 
-// Configuración de la red Wi-Fi del ESP32
-const char *ssid = "Musical_stepper_box";
-const char *password = "Pugcitabb"; // Mínimo 8 caracteres
+const char* ssid = "Caja_Musical_Mecatronica";
+const char* password = "876543210_password";
 
 AsyncWebServer server(80);
 
-// Función para inicializar LittleFS y verificar que funcione el hardware de memoria
-void iniciarLittleFS()
-{
-  if (!LittleFS.begin(true))
-  {
-    Serial.println("¡Error crítico! No se pudo montar el sistema LittleFS.");
-    return;
-  }
-  Serial.println("LittleFS montado con éxito.");
+// ==========================================
+// 1. DEFINICIÓN DE TIPOS (Moldes limpios)
+// ==========================================
+enum EstadoMusica { 
+    STOPPED, 
+    PLAYING, 
+    PAUSED 
+};
+
+// ==========================================
+// 2. VARIABLES GLOBALES DE CONTROL
+// ==========================================
+// Ponemos una línea en blanco intermedia para romper el contexto que confunde al IDE
+volatile EstadoMusica estadoActual = STOPPED;
+
+String archivoParaReproducir = "";
+volatile float factorVelocidad = 1.0; // 1.0 = normal, 2.0 = doble rápido, 0.5 = mitad de velocidad
+
+// 'Handle' o identificador de la tarea de música para poder controlarla desde la red
+TaskHandle_t xTareaMusicaHandle = NULL;
+
+void iniciarLittleFS() {
+    if (!LittleFS.begin(true)) { Serial.println("Error al montar LittleFS"); return; }
+    Serial.println("LittleFS listo.");
 }
 
-// Función que lee el CSV línea por línea y hace sonar los motores en tiempo real
-void reproducirDesdeCSV(const char *rutaArchivo)
-{
-  // Abrir el archivo en modo lectura ("r")
-  File archivo = LittleFS.open(rutaArchivo, "r");
-  if (!archivo)
-  {
-    Serial.println("Error: No se pudo abrir el archivo de música.");
-    return;
-  }
+// --- TAREA DE FREERTOS: REPRODUCTOR DE MÚSICA ---
+void tareaReproductorMusica(void *pvParameters) {
+    // Esta función se ejecuta de forma independiente e infinita en su propio hilo
+    for (;;) {
+        // Si el estado no es PLAYING, la tarea cede el procesador para no gastar recursos
+        if (estadoActual != PLAYING) {
+            vTaskDelay(pdMS_TO_TICKS(100)); // Esperar 100ms de forma no bloqueante
+            continue;
+        }
 
-  Serial.println("Reproduciendo archivo...");
+        File archivo = LittleFS.open(archivoParaReproducir, "r");
+        if (!archivo) {
+            Serial.println("Error: Archivo no encontrado.");
+            estadoActual = STOPPED;
+            continue;
+        }
 
-  // Habilitar etapas de potencia de los drivers (LOW es activo)
-  digitalWrite(PIN_ENABLE_1, LOW);
-  digitalWrite(PIN_ENABLE_2, LOW);
+        digitalWrite(PIN_ENABLE_1, LOW);
+        digitalWrite(PIN_ENABLE_2, LOW);
 
-  // Leer el archivo línea por línea hasta el final
-  while (archivo.available())
-  {
-    String linea = archivo.readStringUntil('\n');
-    linea.trim(); // Limpiar espacios ocultos o saltos de línea de Windows (\r)
+        while (archivo.available() && estadoActual != STOPPED) {
+            // MECANISMO DE PAUSA: Si desde la app mandan PAUSE, nos congelamos aquí
+            while (estadoActual == PAUSED) {
+                ledcWriteTone(CANAL_LEDC_1, 0);
+                ledcWriteTone(CANAL_LEDC_2, 0);
+                vTaskDelay(pdMS_TO_TICKS(100)); // Dormir la tarea de 100ms en 100ms sin congelar el chip
+            }
 
-    // Ignorar líneas vacías o comentarios que empiecen con '#'
-    if (linea.length() == 0 || linea.startsWith("#"))
-    {
-      continue;
+            // Si el estado cambió a STOPPED a mitad de la canción, salimos del bucle
+            if (estadoActual == STOPPED) break;
+
+            String linea = archivo.readStringUntil('\n');
+            linea.trim();
+            if (linea.length() == 0 || linea.startsWith("#")) continue;
+
+            int primeraComa = linea.indexOf(',');
+            int segundaComa = linea.indexOf(',', primeraComa + 1);
+
+            if (primeraComa != -1 && segundaComa != -1) {
+                uint32_t freq1 = linea.substring(0, primeraComa).toInt();
+                uint32_t freq2 = linea.substring(primeraComa + 1, segundaComa).toInt();
+                uint32_t duracionOriginal = linea.substring(segundaComa + 1).toInt();
+
+                // CONTROL DE VELOCIDAD MATEMÁTICO:
+                // Modificamos el tiempo que dura la nota dividiendo entre el factor de velocidad
+                uint32_t duracionAjustada = (uint32_t)(duracionOriginal / factorVelocidad);
+
+                if (freq1 == 0) ledcWriteTone(CANAL_LEDC_1, 0);
+                else ledcWriteTone(CANAL_LEDC_1, freq1);
+
+                if (freq2 == 0) ledcWriteTone(CANAL_LEDC_2, 0);
+                else ledcWriteTone(CANAL_LEDC_2, freq2);
+
+                // Reemplazamos delay() por vTaskDelay() nativo de FreeRTOS.
+                // Esto permite que el procesador atienda la red MIENTRAS la nota está sonando.
+                vTaskDelay(pdMS_TO_TICKS(duracionAjustada));
+
+                // Breve silencio de separación
+                ledcWriteTone(CANAL_LEDC_1, 0);
+                ledcWriteTone(CANAL_LEDC_2, 0);
+                vTaskDelay(pdMS_TO_TICKS(15));
+            }
+        }
+
+        archivo.close();
+        digitalWrite(PIN_ENABLE_1, HIGH);
+        digitalWrite(PIN_ENABLE_2, HIGH);
+        estadoActual = STOPPED;
+        Serial.println("Canción terminada o detenida.");
     }
-
-    // --- PROCESAR LA LÍNEA (Parsing de comas) ---
-    int primeraComa = linea.indexOf(',');
-    int segundaComa = linea.indexOf(',', primeraComa + 1);
-
-    if (primeraComa != -1 && segundaComa != -1)
-    {
-      // Recortar y convertir los fragmentos de texto a números enteros
-      uint32_t freq1 = linea.substring(0, primeraComa).toInt();
-      uint32_t freq2 = linea.substring(primeraComa + 1, segundaComa).toInt();
-      uint32_t duracion = linea.substring(segundaComa + 1).toInt();
-
-      // Ejecutar frecuencias en los motores mediante hardware LEDC
-      if (freq1 == 0)
-        ledcWriteTone(CANAL_LEDC_1, 0);
-      else
-        ledcWriteTone(CANAL_LEDC_1, freq1);
-
-      if (freq2 == 0)
-        ledcWriteTone(CANAL_LEDC_2, 0);
-      else
-        ledcWriteTone(CANAL_LEDC_2, freq2);
-
-      // Mantener la nota el tiempo indicado en el CSV
-      delay(duracion);
-
-      // Brevísimo espacio de separación de 15ms para que las notas no se empasten
-      ledcWriteTone(CANAL_LEDC_1, 0);
-      ledcWriteTone(CANAL_LEDC_2, 0);
-      delay(15);
-    }
-  }
-
-  // Cerrar el archivo y apagar motores al terminar la canción
-  archivo.close();
-  digitalWrite(PIN_ENABLE_1, HIGH);
-  digitalWrite(PIN_ENABLE_2, HIGH);
-  Serial.println("Fin de la canción.");
 }
 
-// --- Agrega esta variable global arriba de tu setup ---
-volatile bool arrancarMusica = false;
-String archivoSeleccionado = ""; // Aquí guardaremos la ruta de la canción elegida
-
-// --- FUNCIÓN PARA ESCANEAR LA MEMORIA Y MANDAR LA LISTA A ANDROID ---
+// --- FUNCIÓN PARA ESCANEAR ARCHIVOS (Igual a la anterior) ---
 String obtenerListaCanciones() {
     String lista = "";
     File raiz = LittleFS.open("/");
-    if (!raiz) return "ERROR_AL_LEER_RAIZ";
-
+    if (!raiz) return "ERROR";
     File archivo = raiz.openNextFile();
     while (archivo) {
         String nombre = archivo.name();
-        // Filtramos para mandar solo los archivos que sean de música (.csv)
         if (nombre.endsWith(".csv")) {
-            if (lista.length() > 0) {
-                lista += ","; // Separamos las canciones por comas para la App
-            }
+            if (lista.length() > 0) lista += ",";
             lista += nombre;
         }
         archivo = raiz.openNextFile();
@@ -126,60 +136,85 @@ String obtenerListaCanciones() {
     return lista;
 }
 
-void setup()
-{
-  Serial.begin(115200);
+void setup() {
+    Serial.begin(115200); //Inicia el monitor serial
+    //Configuracion de Pines
+    pinMode(PIN_DIR_1, OUTPUT); pinMode(PIN_ENABLE_1, OUTPUT);
+    pinMode(PIN_DIR_2, OUTPUT); pinMode(PIN_ENABLE_2, OUTPUT);
+    digitalWrite(PIN_ENABLE_1, HIGH); digitalWrite(PIN_ENABLE_2, HIGH);
+    //Configuracion de canales LEDC
+    ledcSetup(CANAL_LEDC_1, 2000, RESOLUCION_BITS); ledcAttachPin(PIN_STEP_1, CANAL_LEDC_1);
+    ledcSetup(CANAL_LEDC_2, 2000, RESOLUCION_BITS); ledcAttachPin(PIN_STEP_2, CANAL_LEDC_2);
+    //Iniciamos el sistema de archivos y la red wifi
+    iniciarLittleFS();
+    WiFi.softAP(ssid, password);
 
-  // Configuración de salidas digitales
-  pinMode(PIN_DIR_1, OUTPUT);
-  pinMode(PIN_ENABLE_1, OUTPUT);
-  pinMode(PIN_DIR_2, OUTPUT);
-  pinMode(PIN_ENABLE_2, OUTPUT);
-  digitalWrite(PIN_ENABLE_1, HIGH);
-  digitalWrite(PIN_ENABLE_2, HIGH);
-
-  // Configuración de canales de audio por hardware
-  ledcSetup(CANAL_LEDC_1, 2000, RESOLUCION_BITS);
-  ledcAttachPin(PIN_STEP_1, CANAL_LEDC_1);
-  ledcSetup(CANAL_LEDC_2, 2000, RESOLUCION_BITS);
-  ledcAttachPin(PIN_STEP_2, CANAL_LEDC_2);
-
-  // Inicializar memoria Flash local
-  iniciarLittleFS();
-
-  WiFi.softAP(ssid, password);
-
-  server.on("/conectar", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(200, "text/plain", "CONEXION_EXITOSA"); });
-
-  // Nuevo Endpoint: La app de Android llamará aquí para llenar su lista/spinner
-    server.on("/lista", HTTP_GET, [](AsyncWebServerRequest *request){
-        String listaCanciones = obtenerListaCanciones();
-        request->send(200, "text/plain", listaCanciones);
+    // --- CONFIGURACIÓN DE LOS ENDPOINTS DEL SERVIDOR WEB ---
+    server.on("/conectar", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "text/plain", "CONEXION_EXITOSA");
     });
 
-// Endpoint Modificado: Ahora recibe el nombre de la canción dinámicamente
+    server.on("/lista", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "text/plain", obtenerListaCanciones());
+    });
+
+    // 1. REPRODUCIR (O reanudar)
     server.on("/reproducir", HTTP_GET, [](AsyncWebServerRequest *request){
-        // Comprobamos si la App envió el parámetro de la canción (ej: ?archivo=love_grows.csv)
         if (request->hasParam("archivo")) {
-            AsyncWebParameter* p = request->getParam("archivo");
-            archivoSeleccionado = "/" + p->value(); // Construimos la ruta (/love_grows.csv)
-            arrancarMusica = true;                  // Activamos la bandera para el loop
-            request->send(200, "text/plain", "Reproduciendo: " + p->value());
+            archivoParaReproducir = "/" + request->getParam("archivo")->value();
+            estadoActual = PLAYING;
+            request->send(200, "text/plain", "Reproduciendo archivo");
+        } else if (estadoActual == PAUSED) {
+            estadoActual = PLAYING; // Si estaba pausado, simplemente reanuda
+            request->send(200, "text/plain", "Música reanudada");
         } else {
-            request->send(400, "text/plain", "Falta el parámetro 'archivo'");
+            request->send(400, "text/plain", "Error en petición");
         }
     });
 
-  server.end(); // Asegurar reinicio limpio de rutas
-  server.begin();
+    // 2. PAUSAR
+    server.on("/pausa", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (estadoActual == PLAYING) {
+            estadoActual = PAUSED;
+            request->send(200, "text/plain", "MÚSICA_PAUSADA");
+        } else {
+            request->send(200, "text/plain", "No hay música sonando");
+        }
+    });
+
+    // 3. DETENER (STOP)
+    server.on("/detener", HTTP_GET, [](AsyncWebServerRequest *request){
+        estadoActual = STOPPED;
+        request->send(200, "text/plain", "MÚSICA_DETENIDA");
+    });
+
+    // 4. CAMBIAR VELOCIDAD (Ej: /velocidad?factor=1.5)
+    server.on("/velocidad", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (request->hasParam("factor")) {
+            String val = request->getParam("factor")->value();
+            factorVelocidad = val.toFloat();
+            request->send(200, "text/plain", "Velocidad cambiada a " + val);
+        } else {
+            request->send(400, "text/plain", "Falta factor");
+        }
+    });
+
+    server.begin();
+
+    // --- INVOCACIÓN CRÍTICA DE FREERTOS ---
+    // Creamos la tarea de música y la "clavamos" explícitamente en el CORE 1.
+    // De esta forma, el CORE 0 queda 100% libre para procesar el WiFi y las peticiones asíncronas de la App.
+    xTaskCreatePinnedToCore(
+        tareaReproductorMusica,    // Función que contiene la tarea
+        "TareaMusica",             // Nombre interno de la tarea
+        4096,                      // Tamaño de memoria asignado (Stack size en bytes)
+        NULL,                      // Parámetros de entrada
+        1,                         // Prioridad de la tarea
+        &xTareaMusicaHandle,       // Handle de seguimiento
+        1                          // ID del Núcleo del ESP32 (Core 1)
+    );
 }
 
-void loop()
-{
-if (arrancarMusica) {
-        arrancarMusica = false; 
-        // Convertimos el String de C++ a una cadena clásica de C (const char*)
-        reproducirDesdeCSV(archivoSeleccionado.c_str()); 
-    }
-}
+// Como FreeRTOS maneja todo a través de sus propias tareas en segundo plano,
+// el loop() de Arduino se queda completamente vacío y sin usar.
+void loop() {}

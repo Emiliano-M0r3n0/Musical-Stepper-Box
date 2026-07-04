@@ -14,37 +14,80 @@
         android:text="Caja Musical IoT 🎼"
         android:textSize="24sp"
         android:textStyle="bold"
-        android:layout_marginBottom="32dp"/>
+        android:layout_marginBottom="24dp"/>
 
     <Button
         android:id="@+id/btnConectar"
         android:layout_width="match_parent"
-        android:layout_height="60dp"
+        android:layout_height="55dp"
         android:text="Conectar a Caja"
-        android:textSize="18sp"
+        android:textSize="16sp"
         android:backgroundTint="#4CAF50"
-        android:layout_marginBottom="24dp" />
+        android:layout_marginBottom="20dp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Selecciona una canción:"
-        android:textSize="16sp"
+        android:textSize="14sp"
         android:layout_marginBottom="8dp"/>
 
     <Spinner
         android:id="@+id/spinnerCanciones"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="32dp"
+        android:layout_marginBottom="24dp"
         android:minHeight="48dp" />
 
-    <Button
-        android:id="@+id/btnReproducir"
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:text="Reproducir Melodía"
-        android:textSize="18sp"
-        android:backgroundTint="#2196F3" />
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:weightSum="3"
+        android:layout_marginBottom="32dp">
 
+        <Button
+            android:id="@+id/btnReproducir"
+            android:layout_width="0dp"
+            android:layout_height="60dp"
+            android:layout_weight="1"
+            android:text="Play"
+            android:layout_marginEnd="4dp"
+            android:backgroundTint="#2196F3" />
+
+        <Button
+            android:id="@+id/btnPausa"
+            android:layout_width="0dp"
+            android:layout_height="60dp"
+            android:layout_weight="1"
+            android:text="Pausa"
+            android:layout_marginEnd="4dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#FF9800" />
+
+        <Button
+            android:id="@+id/btnDetener"
+            android:layout_width="0dp"
+            android:layout_height="60dp"
+            android:layout_weight="1"
+            android:text="Stop"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#F44336" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/txtVelocidad"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Velocidad: 1.0x (Normal)"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp"/>
+
+    <SeekBar
+        android:id="@+id/seekBarVelocidad"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="3"
+        android:progress="1" />
 </LinearLayout>

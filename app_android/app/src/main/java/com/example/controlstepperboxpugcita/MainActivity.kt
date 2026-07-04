@@ -10,6 +10,8 @@ import com.android.volley.Request
 import com.android.volley.toolbox.StringRequest
 import com.android.volley.toolbox.Volley
 import android.widget.Button
+import android.widget.SeekBar
+import android.widget.TextView
 
 class MainActivity : AppCompatActivity() {
 
@@ -19,64 +21,94 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnConectar: Button
     private lateinit var spinnerCanciones: Spinner
     private lateinit var btnReproducir: Button
+    private lateinit var btnPausa: Button
+    private lateinit var btnDetener: Button
+    private lateinit var seekBarVelocidad: SeekBar
+    private lateinit var txtVelocidad: TextView
+
     private var listaDeCanciones: List<String> = ArrayList()
+
+    // Mapeo del SeekBar: Posiciones de 0 a 3 mapeadas a floats de velocidad
+    private val valoresVelocidad = floatArrayOf(0.5f, 1.0f, 1.5f, 2.0f)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Inicializar TODOS los componentes de la interfaz
+        // Vincular componentes del XML
         btnConectar = findViewById(R.id.btnConectar)
         spinnerCanciones = findViewById(R.id.spinnerCanciones)
         btnReproducir = findViewById(R.id.btnReproducir)
+        btnPausa = findViewById(R.id.btnPausa)
+        btnDetener = findViewById(R.id.btnDetener)
+        seekBarVelocidad = findViewById(R.id.seekBarVelocidad)
+        txtVelocidad = findViewById(R.id.txtVelocidad)
 
-        // Al inicio, deshabilitamos el botón de reproducir hasta que estemos conectados
-        btnReproducir.isEnabled = false
+        // Estado inicial de los botones de control (Congelados hasta conectar)
+        setControlesActivos(false)
 
-        // 1. El botón Conectar valida la red y jala la lista si todo sale bien
-        btnConectar.setOnClickListener {
-            enviarComandoConectar()
-        }
+        // 1. Botón Conectar
+        btnConectar.setOnClickListener { enviarComandoConectar() }
 
-        // 2. Configurar la acción del botón de reproducir
+        // 2. Botón Play (Manda la canción seleccionada o reanuda si estaba en pausa)
         btnReproducir.setOnClickListener {
             if (listaDeCanciones.isNotEmpty()) {
                 val cancionSeleccionada = spinnerCanciones.selectedItem.toString()
-                enviarComandoReproducir(cancionSeleccionada)
-            } else {
-                Toast.makeText(this, "La lista de canciones está vacía. Intenta conectar de nuevo.", Toast.LENGTH_SHORT).show()
+                enviarComandoDinamico("$IP_ESP32/reproducir?archivo=$cancionSeleccionada")
             }
         }
+
+        // 3. Botón Pausa
+        btnPausa.setOnClickListener {
+            enviarComandoDinamico("$IP_ESP32/pausa")
+        }
+
+        // 4. Botón Stop
+        btnDetener.setOnClickListener {
+            enviarComandoDinamico("$IP_ESP32/detener")
+        }
+
+        // 5. Configuración del Slider de Velocidad
+        seekBarVelocidad.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val factor = valoresVelocidad[progress]
+                txtVelocidad.text = "Velocidad: ${factor}x"
+
+                // Manda el cambio inmediatamente mientras arrastras el dedo
+                enviarComandoDinamico("$IP_ESP32/velocidad?factor=$factor")
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
     }
 
-    /**
-     * Envía una petición HTTP GET al ESP32 para verificar la comunicación.
-     * Si tiene éxito, manda a llamar automáticamente a cargarListaDeCanciones().
-     */
+    // Función auxiliar para habilitar o deshabilitar los botones de control de golpe
+    private fun setControlesActivos(activar: Boolean) {
+        btnReproducir.isEnabled = activar
+        btnPausa.isEnabled = activar
+        btnDetener.isEnabled = activar
+        seekBarVelocidad.isEnabled = activar
+    }
+
     private fun enviarComandoConectar() {
         val url = "$IP_ESP32/conectar"
         val queue = Volley.newRequestQueue(this)
 
-        val stringRequest = StringRequest(
-            Request.Method.GET, url,
+        val stringRequest = StringRequest(Request.Method.GET, url,
             { response ->
-                Log.d(TAG, "Respuesta del ESP32: $response")
                 if (response.trim() == "CONEXION_EXITOSA") {
-                    Toast.makeText(this, "¡Caja musical detectada! 🎸 Cargando canciones...", Toast.LENGTH_SHORT).show()
-
-                    // PASO CLAVE: Si la conexión es exitosa, descargamos la lista de LittleFS
-                    cargarListaDeCanciones()
+                    Toast.makeText(this, "¡Caja conectada con éxito! 🎸", Toast.LENGTH_SHORT).show()
+                    cargarListaDeCanciones() // Si conecta, descarga la lista
                 }
             },
             { error ->
                 Log.e(TAG, "Error de red: ${error.message}")
-                Toast.makeText(this, "Error: No se pudo conectar a la caja. Revisa que estés en el Wi-Fi de la caja.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Error de enlace. Revisa tu conexión Wi-Fi.", Toast.LENGTH_LONG).show()
             }
         )
         queue.add(stringRequest)
     }
 
-    // Función HTTP GET para obtener las canciones y rellenar el Spinner
     private fun cargarListaDeCanciones() {
         val queue = Volley.newRequestQueue(this)
         val url = "$IP_ESP32/lista"
@@ -84,43 +116,38 @@ class MainActivity : AppCompatActivity() {
         val stringRequest = StringRequest(Request.Method.GET, url,
             { response ->
                 if (response.isNotEmpty() && !response.contains("ERROR")) {
-                    // Romper la cadena por comas y guardarla en la lista de Kotlin
                     listaDeCanciones = response.split(",")
 
-                    // Llenar el adaptador visual del Spinner
                     val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, listaDeCanciones)
                     adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
                     spinnerCanciones.adapter = adapter
 
-                    // Habilitar el botón de reproducir ya que hay música lista
-                    btnReproducir.isEnabled = true
-                    Toast.makeText(this, "¡Lista de canciones actualizada! 🎼", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "No se encontraron archivos .csv en el ESP32", Toast.LENGTH_LONG).show()
+                    // Activamos todos los botones porque la caja está lista para la acción
+                    setControlesActivos(true)
                 }
             },
             { error ->
-                Toast.makeText(this, "Error al descargar la lista de canciones", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Error al descargar catálogo", Toast.LENGTH_SHORT).show()
                 error.printStackTrace()
             })
-
         queue.add(stringRequest)
     }
 
-    // Función HTTP GET dinámica para enviar la canción elegida
-    private fun enviarComandoReproducir(archivoCsv: String) {
+    /**
+     * Función genérica simplificada para enviar cualquier comando GET al ESP32
+     * (reproducir, pausar, detener, velocidad). Reduce repetición de código.
+     */
+    private fun enviarComandoDinamico(url: String) {
         val queue = Volley.newRequestQueue(this)
-        val url = "$IP_ESP32/reproducir?archivo=$archivoCsv"
-
         val stringRequest = StringRequest(Request.Method.GET, url,
             { response ->
-                Toast.makeText(this, response, Toast.LENGTH_SHORT).show()
+                Log.d(TAG, "ESP32 dice: $response")
             },
             { error ->
-                Toast.makeText(this, "Error al enviar comando de reproducción", Toast.LENGTH_SHORT).show()
+                Log.e(TAG, "Fallo de comando a URL: $url")
                 error.printStackTrace()
-            })
-
+            }
+        )
         queue.add(stringRequest)
     }
 }
